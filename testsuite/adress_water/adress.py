@@ -231,7 +231,8 @@ Ek = 0.5 * T * (3 * num_particles)
 Ep = interNB.computeEnergy()
 Eb = interFENE.computeEnergy()
 
-sys.stdout = open('output.txt', 'w')
+if len(sys.argv) > 1:
+    sys.stdout = open('{}/output.txt'.format(sys.argv[1]), 'w')
 
 sys.stdout.write(' step     T          P        Pxy       etotal     epotential      ebonded     ekinetic\n')
 sys.stdout.write(fmt % (0, T, P, Pij[3], Ek + Ep + Eb, Ep, Eb, Ek))
