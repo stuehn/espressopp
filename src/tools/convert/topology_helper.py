@@ -222,6 +222,16 @@ class PeriodicDihedralInteractionType(InteractionType):
     def automaticExclusion(self):
         return True
 
+class RyckaertBellemansDihedralInteractionType(InteractionType):
+    def createEspressoInteraction(self, system, fpl):
+        print('RyckaertBellemans: {}'.format(self.parameters))
+        return espressopp.interaction.FixedQuadrupleListDihedralRB(
+            system,
+            fpl,
+            espressopp.interaction.DihedralRB(**{k: v for k, v in self.parameters.iteritems()}))
+    def automaticExclusion(self):
+        return True
+
     
 def ParseBondTypeParam(line):
     tmp = line.split() 
