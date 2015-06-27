@@ -103,7 +103,6 @@ def read(gro_file, top_file="", doRegularExcl=True, defines=None):
         # statements in the .top and .itp files
         fb=FileBuffer()
         
-        defines = {}
         FillFileBuffer(top_file, fb, defines=defines)
         f = PostProcessFileBuffer(fb, defines)
 
