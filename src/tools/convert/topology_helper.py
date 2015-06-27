@@ -23,7 +23,9 @@
 
 import espressopp
 import math
+import os
 import gromacs
+import re
 
 class FileBuffer():
     def __init__(self):
@@ -51,19 +53,52 @@ class FileBuffer():
 	return self.pos
         
 
-def FillFileBuffer(fname, filebuffer):
-    f=open(fname, 'r')
+
+def FillFileBuffer(fname, filebuffer, cwd=None, defines=None):
+    if cwd is None:
+        cwd = '.'
+    if defines is None:
+        defines = {}
+    f=open(os.path.join(cwd, fname), 'r')
     for line in f:
-	if "include" in line and not line[0]==';':
-	    name=(line.split()[1]).strip('\"')
-	    FillFileBuffer(name, filebuffer)
-	else:
+        if "include" in line and not line[0]==';':
+            name=(line.split()[1]).strip('\"')
+            cwd_name = os.path.dirname(name)
+            if cwd_name != '':
+                cwd = cwd_name
+            FillFileBuffer(name, filebuffer, cwd, defines)
+        elif 'define' in line:
+            t = line.strip().split()
+            if len(t) > 2:
+                defines[t[1]] = ' '.join(t[2:])
+        else:
             l=line.rstrip('\n')
 	    if l:
                 filebuffer.appendline(l)
             
     f.close
     return
+
+
+def PostProcessFileBuffer(filebuffer, defines):
+    """Replace all defines with the value from the dictionary."""
+    ret_fb = FileBuffer()
+    define_keys = set(defines)
+    for line in filebuffer.lines:
+        line = line.strip()
+        if line:
+            if not (line.startswith(';') or line.startswith('#define') 
+                    or line.startswith('#include')):
+                def_key = set.intersection(set(map(str.strip, line.split())), define_keys)
+                if def_key:
+                    def_key = def_key.pop()
+                    ret_fb.appendline(
+                        line.replace(def_key, defines[def_key]))
+                else:
+                    ret_fb.appendline(line)
+            else:
+                ret_fb.appendline(line)
+    return ret_fb
 
 
 def FindType(proposedtype, typelist):
@@ -74,7 +109,14 @@ def FindType(proposedtype, typelist):
     elif len(list)==0:
         return None
     return list[0]
-    
+
+
+def convertc6c12(c6, c12):
+    """Conversts C6 and C12 parameters to sigma and epsilon."""
+    sig = pow(c12/c6, 1.0/6.)
+    eps = 0.25*c6*pow(sig, -6.0)
+    return sig, eps
+
 
 class InteractionType:
     def __init__(self, parameters):
@@ -191,6 +233,11 @@ def ParseBondTypeParam(line):
         p=TabulatedBondInteractionType({"tablenr":int(tmp[3]), "k":float(tmp[4]), 'excl':False})
     elif btype == "1":
         p=HarmonicBondedInteractionType({"b0":float(tmp[3]), "kb":float(tmp[4])})
+    elif btype == "2":
+        # Converts from GROMOS Harmonic to Harmonic
+        # k_harm = 2*kb*b0**2
+        kb = 0.5*2*float(tmp[4])*(float(tmp[3])**2)
+        p = HarmonicBondedInteractionType({"b0":float(tmp[3]), "kb":kb})
     elif btype == "3":
         p=MorseBondedInteractionType({"b0":float(tmp[3]), "D":float(tmp[4]), "beta":float(tmp[5])})
     elif btype == "7":
@@ -208,6 +255,10 @@ def ParseAngleTypeParam(line):
     type= int(tmp[3])
     if type == 1:
         p=HarmonicAngleInteractionType({"theta":float(tmp[4]), "k":float(tmp[5])})
+    elif type == 2:
+        theta = float(tmp[4])*math.pi/180.0
+        k = 0.5*float(tmp[5])*(math.sin(theta)**2)
+        p = HarmonicAngleInteractionType({"theta":float(tmp[4]), "k":k})
     elif type == 8:
         p=TabulatedAngleInteractionType({"tablenr":int(tmp[4]),"k":float(tmp[5])})
     else:
@@ -223,6 +274,9 @@ def ParseDihedralTypeParam(line):
         p=TabulatedDihedralInteractionType({"tablenr":int(tmp[5]), "k":float(tmp[6])})
     elif (type == 1) or (type == 9): 
         p=PeriodicDihedralInteractionType({"phase":float(tmp[5]), "k":float(tmp[6]), "n":float(tmp[7])})
+    elif type == 3:
+        tmp[5:11] = map(float, tmp[5:11])
+        p = RyckaertBellemansDihedralInteractionType({'K0': tmp[5], 'K1': tmp[6], 'K2': tmp[7], 'K3': tmp[8], 'K4': tmp[9], 'K5': tmp[10]})
     else:
         print "Unsupported dihedral type", type, "in line:"
         print line

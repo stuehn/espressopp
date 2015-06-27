@@ -33,14 +33,18 @@ from operator import itemgetter # for sorting a dict
    It containts functions: read(), setInteractions(), convertTable()
    """
    
-def read(gro_file, top_file="", doRegularExcl=True):
+def read(gro_file, top_file="", doRegularExcl=True, defines=None):
     """ Read GROMACS data files.
 
     Keyword arguments:
     gro_file -- contains coordinates of all particles, the number of particles, velocities and box size.
     top_file -- contains topology information. Included topology files (.itp) are also read
     doRegularExcl -- if True, exclusions are generated automatically based on the nregxcl parameter (see gromacs manual)
+    defines: Dictionary with #define <key> <value>.
     """
+    
+    if defines is None:
+        defines = {}
 
     # read gro file
     if gro_file != "":
@@ -97,10 +101,12 @@ def read(gro_file, top_file="", doRegularExcl=True):
         # FileBuffer: a class which behaves like a file, but all lines are in memory
         # we use this for emulating a 'preprocessor' which handles the #include
         # statements in the .top and .itp files
-        f=FileBuffer() 
+        fb=FileBuffer()
         
-        FillFileBuffer(top_file, f)
-                
+        defines = {}
+        FillFileBuffer(top_file, fb, defines=defines)
+        f = PostProcessFileBuffer(fb, defines)
+
         print "Reading top file: "+top_file
         line = ''
         itp_files = []
@@ -123,6 +129,7 @@ def read(gro_file, top_file="", doRegularExcl=True):
         molecules=[]
         #molecules = {} # key: moleculeid value: name (string)
         readmolecules = False
+        skip_section = False
        
         lineindex=-1
         for line in f.lines:
@@ -130,7 +137,31 @@ def read(gro_file, top_file="", doRegularExcl=True):
            
             if line[0] == ";":  # skip comment line
                 continue
-                
+
+            if skip_section and line.startswith('#end'):
+                skip_section = False
+                continue
+
+            if skip_section:
+                continue
+
+            if line.startswith('#ifdef'):
+                define_tmp = line.split()
+                if len(define_tmp) > 1:
+                    skip_section = defines.get(define_tmp[1], False)
+                else:
+                    skip_section = True
+                continue
+
+            if line.startswith('#else'):
+                skip_section = True
+                continue
+
+            if line.startswith("#define"):
+                define_tmp = line.split()
+                defines[define_tmp[1]] = True
+                continue
+
             if 'defaults' in line: # store some gromacs default values
                 readdefaults =True
                 continue
