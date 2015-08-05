@@ -112,9 +112,13 @@ def FindType(proposedtype, typelist):
 
 
 def convertc6c12(c6, c12):
-    """Conversts C6 and C12 parameters to sigma and epsilon."""
+    if c12 == 0.0:
+        return 1.0, 0.0
     sig = pow(c12/c6, 1.0/6.)
-    eps = 0.25*c6*pow(sig, -6.0)
+    if sig > 0.0:
+        eps = 0.25*c6*pow(sig, -6.0)
+    else:
+        eps = 0.0
     return sig, eps
 
 
