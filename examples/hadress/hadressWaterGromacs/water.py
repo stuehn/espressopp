@@ -26,8 +26,8 @@ from espressopp.tools import timers
 # In the current implementation only one type of atomistic potential can be set for each interaction(template). This makes it necessarry to creat two interaction templates (one for coulomb, one for lennard-jones) and leave the coarse-grained interaction unset in one of them.
 
 # simulation parameters (nvt = False is nve)
-steps = 100000
-check = steps/1
+steps = 100
+check = 5
 timestep = 0.0005
 # parameters to convert GROMACS tabulated potential file
 sigma = 1.0
@@ -51,8 +51,9 @@ topfile = "topol.top"
 # this calls the gromacs parser for processing the top file (and included files) and the conf file
 # The variables at the beginning defaults, types, etc... can be found by calling
 # gromacs.read(grofile,topfile) without return values. It then prints out the variables to be unpacked
+input_conf = gromacs.read(grofile, topfile, return_tuple=False)
 
-defaults, types, atomtypes, masses, charges, atomtypeparameters, bondtypes, bondtypeparams, angletypes, angletypeparams, exclusions, x, y, z, vx, vy, vz, resname, resid, Lx, Ly, Lz =gromacs.read(grofile,topfile)
+#import IPython; IPython.embed()
 
 # This is an equilibrated configuration!
 dummy1, dummy2, x, y, z, vx, vy, vz, dummy3, dummy4, dummy5 = espressopp.tools.readxyz("equilibrated_conf.xyz")
@@ -62,34 +63,33 @@ dummy1, dummy2, x, y, z, vx, vy, vz, dummy3, dummy4, dummy5 = espressopp.tools.r
 ######################################################################
 #types, bonds, angles, dihedrals, x, y, z, vx, vy, vz, Lx, Ly, Lz = gromacs.read(grofile,topfile)
 #defaults, types, masses, charges, atomtypeparameters, bondtypes, bondtypeparams, angletypes, angletypeparams, exclusions, x, y, z, vx, vy, vz, Lx, Ly, Lz = gromacs.read(grofile,topfile)
-num_particles = len(x)
-
-density = num_particles / (Lx * Ly * Lz)
-size = (Lx, Ly, Lz)
+num_particles = len(input_conf.x)
+box = input_conf.Lx, input_conf.Ly, input_conf.Lz
+density = num_particles / (box[0] * box[1] * box[2])
 
 sys.stdout.write('Setting up simulation ...\n')
 system = espressopp.System()
 
 # Random Number Generator
 xs = time.time()
-seed = int(xs % int(xs) * 10000000000)
+seed = 12345 # int(xs % int(xs) * 10000000000)
 rng = espressopp.esutil.RNG()
 rng.seed(seed)
 system.rng = rng
 
-system.bc = espressopp.bc.OrthorhombicBC(system.rng, size)
+system.bc = espressopp.bc.OrthorhombicBC(system.rng,box)
 system.skin = skin
 
 comm = MPI.COMM_WORLD
 nodeGrid = decomp.nodeGrid(comm.size)
-cellGrid = decomp.cellGrid(size, nodeGrid, rc, skin)
+cellGrid = decomp.cellGrid(box, nodeGrid, rc, skin)
 system.storage = espressopp.storage.DomainDecompositionAdress(system, nodeGrid, cellGrid)
 
 # setting up GROMACS interaction stuff
 # create a force capped Lennard-Jones interaction that uses a verlet list
 verletlist = espressopp.VerletListAdress(system, cutoff=rc, adrcut=rc,
                                 dEx=ex_size, dHy=hy_size,
-                                adrCenter=[Lx/2, Ly/2, Lz/2])
+                                adrCenter=[box[0]/2, box[1]/2, box[2]/2])
                                 
 # add particles to the system and then decompose
 props = ['id', 'pos', 'v', 'f', 'type', 'mass', 'q', 'adrat']
@@ -98,13 +98,14 @@ allParticles = []
 tuples = []
 # prepare AT particles
 for pid in range(num_particles):
-    part = [pid + 1, Real3D(x[pid], y[pid], z[pid]),
-            Real3D(vx[pid],vy[pid], vz[pid]), Real3D(0, 0, 0),
-            types[pid], masses[pid], charges[pid], 1]
+    part = [pid + 1, 
+            Real3D(input_conf.x[pid], input_conf.y[pid], input_conf.z[pid]),
+            Real3D(input_conf.vx[pid],input_conf.vy[pid], input_conf.vz[pid]), Real3D(0, 0, 0),
+            input_conf.types[pid], input_conf.masses[pid], input_conf.charges[pid], 1]
     allParticlesAT.append(part)
 
-num_particlesCG = len(x)/3
-typeCG=0
+num_particlesCG = num_particles/3
+typeCG=max(input_conf.types)+1
 # create CG particles
 for pidCG in range(num_particlesCG):
     # we put CG molecule in first atom, later CG molecules will be positioned in the center
@@ -118,7 +119,6 @@ for pidCG in range(num_particlesCG):
     firsParticleId=tmptuple[1]
     cmp=allParticlesAT[firsParticleId-1][1]
 
-    typeCG=max(types)+1
     # append CG particles  
     allParticles.append([pidCG+num_particles+1, # CG particle has to be added first!
                          Real3D(cmp[0], cmp[1], cmp[2]), # pos
@@ -151,16 +151,26 @@ system.storage.setFixedTuplesAdress(ftpl)
 system.storage.decompose() 
 
 # set up LJ interaction according to the parameters read from the .top file
-ljinteraction=gromacs.setLennardJonesInteractions(system, defaults, atomtypeparameters, verletlist,rca, hadress=True, ftpl=ftpl)
+ljinteraction=gromacs.setLennardJonesInteractions(
+    system=system,
+    defaults=input_conf.defaults,
+    atomtypeparams=input_conf.atomtypeparams, 
+    verletlist=verletlist,
+    cutoff=rca,
+    hadress=True,
+    ftpl=ftpl,
+    table_groups=['CG'])
 
 # set up angle interactions according to the parameters read from the .top file
 
 #fpl = espressopp.FixedTripleListAdress(system.storage, ftpl)
-angleinteractions=gromacs.setAngleInteractionsAdress(system, angletypes, angletypeparams, ftpl)
+angleinteractions=gromacs.setAngleInteractionsAdress(
+    system, input_conf.angletypes, input_conf.angletypeparams, ftpl)
 
 # set up coulomb interactions according to the parameters read from the .top file
 # !! Warning: this only works for reaction-field now!
-qq_interactions=gromacs.setCoulombInteractions(system, verletlist, rca, types, epsilon1=1, epsilon2=80, kappa=0, hadress=True, ftpl=ftpl)
+qq_interactions=gromacs.setCoulombInteractions(
+    system, verletlist, rca, input_conf.types, epsilon1=1, epsilon2=80, kappa=0, hadress=True, ftpl=ftpl)
 
 # load CG interaction from table
 fe="table_CG_CG.tab"
@@ -177,12 +187,13 @@ for n in range(system.getNumberOfInteractions()):
 	break
 
 #fpl = espressopp.FixedPairListAdress(system.storage, ftpl)
-bondedinteractions=gromacs.setBondedInteractionsAdress(system, bondtypes, bondtypeparams, ftpl)
+bondedinteractions=gromacs.setBondedInteractionsAdress(
+    system, input_conf.bondtypes, input_conf.bondtypeparams, ftpl)
 
 
 
 # exlusions, i.e. pairs of atoms not considered for the non-bonded part. Those are defined either by bonds which automatically generate an exclusion. Or by the nregxcl variable
-verletlist.exclude(exclusions)
+verletlist.exclude(input_conf.exclusions)
 
 # add VelocityVerlet Integrator
 integrator = espressopp.integrator.VelocityVerlet(system)
@@ -205,6 +216,7 @@ espressopp.tools.AdressDecomp(system, integrator)
 # print simulation parameters
 print ''
 print 'number of particles =', num_particles
+print 'number of cg particles =', num_particlesCG
 print 'density = %.4f' % (density)
 print 'rc =', rc
 print 'dt =', integrator.dt

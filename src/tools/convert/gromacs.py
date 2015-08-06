@@ -21,7 +21,7 @@
 
 # -*- coding: utf-8 -*-
 import math
-from collections import namedtuple
+from collections import namedtuple, defaultdict
 import espressopp
 from topology_helper import *
 from operator import itemgetter # for sorting a dict
@@ -54,6 +54,7 @@ GromacsTopology = namedtuple(
         'pairtypeparams',
         'nonbond_params',
         'exclusions',
+        'resname',
         'x', 'y', 'z',
         'vx', 'vy', 'vz',
         'Lx', 'Ly', 'Lz'
@@ -68,12 +69,15 @@ def read(gro_file, top_file="", doRegularExcl=True, defines=None, return_tuple=T
     top_file -- contains topology information. Included topology files (.itp) are also read
     doRegularExcl -- if True, exclusions are generated automatically based on the nregxcl parameter (see gromacs manual)
     defines: Dictionary with #define <key> <value>.
-    return_tuple: If set to True (default) then returns old fashion tuple otherwise produce namedtuple.
+    return_tuple: If set to True then output is in the old-fashion way. (default: True)
     """
     
     if defines is None:
         defines = {}
 
+    x, y, z = [], [], []
+    vx, vy, vz = [], [], []
+    resname = []
     # read gro file
     if gro_file != "":
         f = open(gro_file)
@@ -81,15 +85,10 @@ def read(gro_file, top_file="", doRegularExcl=True, defines=None, return_tuple=T
         total_num_particles = int(f.readline())
         
         # store coordinates and velocities
-        x, y, z = [], [], []
-        vx, vy, vz = [], [], []
-        resid = []
-        resname = []
         for i in range(total_num_particles):
             line = f.readline()
             s = line[20:69]
             resname.append(line[5:8])
-            resid.append(int(line[:5]))
             # coordinates
             x.append(float(s[0:8]))
             y.append(float(s[8:16]))
@@ -104,7 +103,6 @@ def read(gro_file, top_file="", doRegularExcl=True, defines=None, return_tuple=T
         # store box size
         Lx, Ly, Lz = map(float, f.readline().split()) # read last line, convert to float
         f.close()
-
 
     # read top and itp files
     masses, charges = [], [] # mases and charges of the whole configuration
@@ -142,13 +140,11 @@ def read(gro_file, top_file="", doRegularExcl=True, defines=None, return_tuple=T
         print "Reading top file: "+top_file
         line = ''
         a = 0
-        bondtypecount, angletypecount, dihedraltypecount, impropertypecount=0,0,0,0
         defaults={} # gromacs default values
         bondtypes={} # a dict: key atomindex(int),atomindex(int)  value: bondtypeid(int)
         angletypes={} # a dict: key atomindex(int), atomindex(int),atomindex(int) value: angletypeid(int)
         dihedraltypes={} # a dict: key atomtindex(int), atomindex(int), atomindex(int),atomindex(int) value: tuple of dihedraltypeid(int)
         impropertypes={} # a dict: key atomtindex(int), atomindex(int), atomindex(int),atomindex(int) value: tuple of dihedraltypeid(int)
-        nonbonds = {}
         atnum_attype = {}
         
         molecules=[]
@@ -198,12 +194,12 @@ def read(gro_file, top_file="", doRegularExcl=True, defines=None, return_tuple=T
                 fields=line.split()
                 # TODO: support for genpairs
                 if len(fields)==5: 
-                    defaults={"nbtype":fields[0], "combinationrule":int(fields[1]),
-                    "genpairs":fields[2] == 'yes', "fudgeLJ": float(fields[3]), 
+                    defaults={"nbtype": int(fields[0]), "combinationrule":int(fields[1]),
+                    "genpairs":fields[2] == 'yes', "fudgeLJ": float(fields[3]),
                     "fudgeQQ":float(fields[4])}
                 else: 
-                    defaults={"nbtype":fields[0],
-                              "combinationrule":int(fields[1])} 
+                    defaults={"nbtype": int(fields[0]),
+                              "combinationrule":int(fields[1])}
 
             if previous_section == 'atomtypes' and current_section != 'atomtypes':
                 # add dihedral wildcard atomtyp
@@ -249,20 +245,16 @@ def read(gro_file, top_file="", doRegularExcl=True, defines=None, return_tuple=T
                         'eps': float(fields[7])
                         }
                 else:
-                    print 'AA other'
+                    print('atomtypes other')
                     tmpprop={
                     "atnum": fields[0], "mass":float(fields[1]),
                     "charge":float(fields[2]), "particletype":fields[3],
                     "sig":float(fields[4]), "eps":float(fields[5])}
-                
                     
                 if attypename not in atomtypes:
                     atomtypes.update({attypename:a}) # atomtypes is used when reading the "atoms" section
                     atomtypeparams.update({a:tmpprop})
                     a += 1
-
-                    
-            
 
             if current_section == 'nonbond_params':
                 fields = l.split(';')[0].split()
@@ -296,7 +288,7 @@ def read(gro_file, top_file="", doRegularExcl=True, defines=None, return_tuple=T
                     # i: i-atomname  i, j: j-atomname
                 pairs = map(atomtypes.get, tmp[:2])
                 if None in pairs:
-                    pairs = [atomtypes.get(atnum_attype.get(i)) for i in tmp[:2]]
+                    pairs = [atomtypes.get(atnum_attype.get(i, i)) for i in tmp[:2]]
                     if None in pairs:
                         continue
                 i, j = pairs
@@ -316,7 +308,7 @@ def read(gro_file, top_file="", doRegularExcl=True, defines=None, return_tuple=T
                 tmp = line.split()
                 triplet = map(atomtypes.get, tmp[:3])
                 if None in triplet:
-                    triplet = [atomtypes.get(atnum_attype.get(i)) for i in tmp[:3]]
+                    triplet = [atomtypes.get(atnum_attype.get(i, i)) for i in tmp[:3]]
                     if None in triplet:
                         continue
                 i, j, k = triplet
@@ -343,38 +335,38 @@ def read(gro_file, top_file="", doRegularExcl=True, defines=None, return_tuple=T
                     continue
                 quadruplet = map(atomtypes.get, tmp[:4])
                 if None in quadruplet:
-                    quadruplet = [atomtypes.get(atnum_attype.get(xx)) for xx in tmp[:4]]
+                    quadruplet = [atomtypes.get(atnum_attype.get(xx, xx)) for xx in tmp[:4]]
                     if None in quadruplet:
                         continue
                 i, j, k, l = quadruplet
                 if fn == 4:  # imporper dihedrals
                     parse_fn = ParseImproperTypeParam
-                    types = impropertypes
-                    type_params = impropertypeparams
+                    d_types = impropertypes
+                    d_type_params = impropertypeparams
                 else:
                     parse_fn = ParseDihedralTypeParam
-                    types = impropertypes
-                    type_params = impropertypeparams
+                    d_types = dihedraltypes
+                    d_type_params = dihedraltypeparams
 
                 p=parse_fn(line)
 
-                dtypeid=FindType(p, impropertypeparams)
+                dtypeid=FindType(p, d_type_params)
                 if dtypeid==None:
-                    dtypeid=len(type_params)
-                    type_params.update({dtypeid:p})
-                if i in types:
-                    if j in types[i]:
-                        if k in types[i][j]:
-                            if l in types[i][j][k]:
-                                types[i][j][k][l]+=(dtypeid,) #not strictly speaking necessary
+                    dtypeid=len(d_type_params)
+                    d_type_params.update({dtypeid:p})
+                if i in d_types:
+                    if j in d_types[i]:
+                        if k in d_types[i][j]:
+                            if l in d_types[i][j][k]:
+                                d_types[i][j][k][l] += dtypeid
                             else:
-                                types[i][j][k].update({l:(dtypeid,)})
+                                d_types[i][j][k].update({l: dtypeid})
                         else:
-                            types[i][j].update({k:{l:(dtypeid,)}})
+                            d_types[i][j].update({k:{l:dtypeid}})
                     else:
-                        types[i].update({j:{k:{l:(dtypeid,)}}})
+                        d_types[i].update({j:{k:{l:dtypeid}}})
                 else:
-                    types.update({i:{j:{k:{l:(dtypeid,)}}}})
+                    d_types.update({i:{j:{k:{l:dtypeid}}}})
             
             if current_section == 'molecules':
                 print " "+line.strip('\n')
@@ -407,8 +399,9 @@ def read(gro_file, top_file="", doRegularExcl=True, defines=None, return_tuple=T
                            masses, charges, num_molecule_copies, res_idx)
 
             # find and store bonds
-            bonds = storeBonds(f, types, bondtypes, bondtypeparams, bonds,
-                               num_atoms_molecule, num_molecule_copies, molstartindex, exclusions, nrexcl, doRegularExcl)
+            bonds = storeBonds(f, types, bondtypes, bondtypeparams, 
+                               bonds, num_atoms_molecule, num_molecule_copies, molstartindex, 
+                               exclusions, nrexcl, doRegularExcl)
 
             # find and store angles
             angles = storeAngles(f, types, angletypes, angletypeparams, angles,
@@ -420,7 +413,8 @@ def read(gro_file, top_file="", doRegularExcl=True, defines=None, return_tuple=T
 
             # find and store impropers
             impropers = storeImpropers(f, types, impropertypes, impropertypeparams, impropers,
-                                       num_atoms_molecule, num_molecule_copies, molstartindex, atomtype_wildcard)
+                                       num_atoms_molecule, num_molecule_copies, molstartindex, 
+                                       atomtype_wildcard)
 
             pairs_1_4 = storePairs(f, defaults, types, pairtypeparams, use_pairtypeparams,
                                    atomtypeparams, pairs_1_4,
@@ -436,10 +430,6 @@ def read(gro_file, top_file="", doRegularExcl=True, defines=None, return_tuple=T
     angletypeparams = {k: v for k, v in angletypeparams.iteritems() if k in angles}
     dihedraltypeparams = {k: v for k, v in dihedraltypeparams.iteritems() if k in dihedrals}
 
-    params = []
-    
-    unpackvars=[]
-
     try:
       del atomtypes['X'] #don't export wildcard atomtype
     except KeyError:
@@ -447,27 +437,36 @@ def read(gro_file, top_file="", doRegularExcl=True, defines=None, return_tuple=T
 
     # The data is packed into a touple, unpackvars contains a string which
     # tells the user which kind of data was read.
-    print 'Found default values {}'.format(defaults)
-    print 'Found {} types'.format(len(types))
-    print 'Found {} nonbonded_pairs'.format(len(use_nonbond_params))
-    print 'Found {} masses'.format(len(masses))
-    print 'Found {} charges'.format(len(charges))
-    print 'Found {} atom type parameters'.format(len(use_atomtypeparams))
-    print 'Found {} bonds'.format(len(bonds))
-    print 'Found {} bond type parameters'.format(len(bondtypeparams))
-    print 'Found {} angles'.format(len(angles))
-    print 'Found {} angle type parameters'.format(len(angletypeparams))
-    print 'Found {} dihedrals'.format(len(dihedrals))
-    print 'Found {} dihedral type parameters'.format(len(dihedraltypeparams))
-    print 'Found {} 1-4 pair type parameters'.format(len(use_pairtypeparams))
-    print 'Found {} 1-4 pairs'.format(len(pairs_1_4))
-    print 'Found {} bond exclusions'.format(len(exclusions))
-    print 'Found box: {}'.format([Lx, Ly, Lz])
-    print 'Found {} particles'.format(len(x))
+    print('Found default values {}'.format(defaults))
+    print('Found {} particles'.format(len(x)))
+    print('Found {} types'.format(len(types)))
+    print('Found {} nonbonded_pairs'.format(len(use_nonbond_params)))
+    print('Found {} masses'.format(len(masses)))
+    print('Found {} charges'.format(len(charges)))
+    print('Found {} atom type parameters'.format(len(use_atomtypeparams)))
+    print('Found {} bonds'.format(sum(map(len, bonds.values()))))
+    print('Found {} bond type parameters'.format(len(bondtypeparams)))
+    print('Found {} angles'.format(sum(map(len, angles.values()))))
+    print('Found {} angle type parameters'.format(len(angletypeparams)))
+    print('Found {} dihedrals'.format(sum(map(len, dihedrals.values()))))
+    print('Found {} dihedral type parameters'.format(len(dihedraltypeparams)))
+    print('Found {} 1-4 pair type parameters'.format(len(use_pairtypeparams)))
+    print('Found {} 1-4 pairs'.format(sum(map(len, pairs_1_4.values()))))
+    print('Found {} bond exclusions'.format(len(exclusions)))
+    print('Found box: {}'.format([Lx, Ly, Lz]))
 
     if return_tuple:
-        # TODO: remove that in next release.
-        print('Warning: this is deprected and will be removed in future version of Espresso++')
+        params = []
+        unpackvars=[]
+
+        try:
+            del atomtypes['X'] #don't export wildcard atomtype
+        except KeyError:
+            pass
+
+        # The data is packed into a touple, unpackvars contains a string which
+        # tells the user which kind of data was read.
+
         if len(defaults) != 0:
             unpackvars.append("defaults")
             params.append(defaults)
@@ -482,15 +481,9 @@ def read(gro_file, top_file="", doRegularExcl=True, defines=None, return_tuple=T
         if len(charges) != 0:
             unpackvars.append("charges")
             params.append(charges)
-        if len(use_atomtypeparams) !=0:
+        if len(atomtypeparams) !=0:
             unpackvars.append("atomtypeparameters")
             params.append(use_atomtypeparams)
-        if len(use_nonbond_params) != 0:
-            unpackvars.append('nonbond_params')
-            params.append(use_nonbond_params)
-        if len(use_pairtypeparams) != 0:
-            unpackvard.append('pairtypeparams')
-            params.append(use_pairtypeparams)
         if len(bonds) != 0:
             unpackvars.append("bondtypes")
             params.append(bonds)
@@ -504,7 +497,7 @@ def read(gro_file, top_file="", doRegularExcl=True, defines=None, return_tuple=T
             unpackvars.append("angletypeparams")
             params.append(angletypeparams)      
         if len(dihedrals) != 0:
-            unpackvard.append('dihedraltypes')
+            unpackvars.append("dihedraltypes")
             params.append(dihedrals)
         if len(dihedraltypeparams) != 0:
             unpackvars.append("dihedraltypeparams")
@@ -519,40 +512,57 @@ def read(gro_file, top_file="", doRegularExcl=True, defines=None, return_tuple=T
             unpackvars.append("exclusions")
             params.append(exclusions)  
         if len(pairs_1_4) != 0:
-            unpackvars.append("onefourpairs")
+            unpackvars.append("pairs_1_4")
             params.append(pairs_1_4)
-
+            unpackvars.append("pairstypeparams")
+            params.append(use_pairtypeparams)
         if len(res_ids) != 0:
             unpackvars.append('res_ids')
             params.append(res_ids)
-            
         unpackvars.append("x, y, z")
         params.extend([x, y, z])
-        print "Found Box:", [Lx, Ly, Lz]
         if len(vx) != 0:
             params.extend([vx, vy, vz])
             unpackvars.append("vx, vy, vz")
-        params.extend([resname,resid])
-        unpackvars.append("resname, resid")
-            
+        
+        unpackvars.append("resname")
+        params.append(resname)
+
         params.extend([Lx, Ly, Lz])
         unpackvars.append("Lx, Ly, Lz")
-        
+
         print "USAGE: unpack as"
         s=""
         for i in range(len(unpackvars)):
             s+=str(unpackvars[i])
             if (i< len(unpackvars)-1): s+=", "
         print s, "=gromacs.read( ... )"
-        
+
         return tuple(params)
-    else:  # Returns simply namedtuple
+    else:
         return GromacsTopology(
-            defaults, types, masses, charges, res_ids, use_atomtypeparams,
-            bonds, bondtypeparams, angles, angletypeparams,
-            dihedrals, dihedraltypeparams, impropers, impropertypeparams,
-            use_nonbond_params, exclusions,
-            x, y, z, vx, vy, vz, Lx, Ly, Lz)
+            defaults, 
+            types, 
+            masses, 
+            charges, 
+            res_ids, 
+            use_atomtypeparams,
+            bonds, 
+            bondtypeparams, 
+            angles, 
+            angletypeparams,
+            dihedrals, 
+            dihedraltypeparams, 
+            impropers, 
+            impropertypeparams,
+            pairs_1_4, 
+            use_pairtypeparams,
+            use_nonbond_params, 
+            exclusions, 
+            resname,
+            x, y, z, 
+            vx, vy, vz, 
+            Lx, Ly, Lz)
 
 
 def storeMolecules(f, molecules, mol=""):
@@ -584,7 +594,6 @@ def storeAtoms(f, defaults, types, atomtypes,
                charges,
                num_molecule_copies,
                res_idx):
-    line = ''
     types_tmp = []
     charge_tmp =[]
     mass_tmp=[]
@@ -604,7 +613,7 @@ def storeAtoms(f, defaults, types, atomtypes,
             continue
         fields=line.split()
         attypeid=atomtypes[fields[1]] # map str type to int type
-        types_tmp.append(attypeid) 
+        types_tmp.append(attypeid)
         if len(fields) > 6:
             # this atom has a charge different from its atomtype
             charge_tmp.append(float(fields[6]))
@@ -660,16 +669,14 @@ def storeAtoms(f, defaults, types, atomtypes,
 def storePairs(f, defaults, types, pairtypeparams,
                use_pairtypeparams,
                atomtypeparams, pairs, num_atoms_molecule, num_molecule_copies, molstartindex):
-    line = ''
     pairs_tmp = []
-    top = False
     file_pos = f.tell()
     line = f.readlastline()
     fudgeLJ = float(defaults.get('fudgeLJ', 1.0))
     print('Using fudgeLJ: {}'.format(fudgeLJ))
     combinationrule = defaults['combinationrule']
     types_pairtypeid = {}
-    
+
     line = f.readline().strip()
     in_section = False
     while line:
@@ -683,52 +690,58 @@ def storePairs(f, defaults, types, pairtypeparams,
         elif line.startswith(';'):
             line = f.readline().strip()
             continue
-        else:
-            if in_section:
-                tmp = line.split(';')[0].split()
-                lookup = len(tmp) <= 3
-                pid1, pid2 = sorted(map(int, tmp[0:2]))
-                t1, t2 = sorted([types[pid1-1], types[pid2-1]])
-                pairtypeid = max(use_pairtypeparams) + 1 if use_pairtypeparams else 0
-                if lookup:
-                    at1 = atomtypeparams[t1]
-                    at2 = atomtypeparams[t2]
-                    if (t1, t2) in pairtypeparams:
-                        if types_pairtypeid:
-                            pairtypeid = types_pairtypeid.setdefault((t1, t2), max(types_pairtypeid.values())+1)
-                        else:
-                            pairtypeid = 0
-                            types_pairtypeid[(t1, t2)] = 0
-                        use_pairtypeparams[pairtypeid] = pairtypeparams[(t1, t2)]
+        elif in_section:
+            tmp = line.split(';')[0].split()
+            lookup = len(tmp) <= 3
+            pid1, pid2 = sorted(map(int, tmp[0:2]))
+            t1, t2 = sorted([types[pid1-1], types[pid2-1]])
+            pairtypeid = max(use_pairtypeparams) + 1 if use_pairtypeparams else 0
+            if lookup:
+                at1 = atomtypeparams[t1]
+                at2 = atomtypeparams[t2]
+                if (t1, t2) in pairtypeparams:
+                    if types_pairtypeid:
+                        pairtypeid = types_pairtypeid.setdefault(
+                            (t1, t2),
+                            max(types_pairtypeid.values())+1)
                     else:
-                        sig_1, eps_1 = at1['sig'], at1['eps']
-                        sig_2, eps_2 = at2['sig'], at2['eps']
-                        eps = fudgeLJ*(eps_1*eps_2)**(1.0/2.0)
-                        if combinationrule == 2:
-                            sig = 0.5*(sig_1 + sig_2)
-                        else:
-                            sig = (sig_1*sig_2)**(1.0/2.0)
-                        pairtypeid = max(use_pairtypeparams) + 1 if use_pairtypeparams else 0
-                        use_pairtypeparams[pairtypeid] = {'sig': sig, 'eps': eps}
-                        pairtypeparams[(t1, t2)] = use_pairtypeparams[pairtypeid]
-                        types_pairtypeid[(t1, t2)] = pairtypeid
-                    pairs_tmp.append((pid1, pid2, pairtypeid))
-                else:  # Params provided
-                    if int(tmp[2]) != 1:
-                        print('Warning! Supported only pair with type 1, given: {}'.format(
-                            tmp[2]))
-                        line = f.readline()
-                        continue
-                    sig = float(tmp[3])
-                    eps = float(tmp[4])
-                    use_pairtypeparams.update({pairtypeid: {
-                            'sig': sig,
-                            'eps': eps
-                            }})
-                    pairs_tmp.append((pid1, pid2, pairtypeid))
-                    pairtypeid += 1
+                        pairtypeid = 0
+                        types_pairtypeid[(t1, t2)] = 0
+                    use_pairtypeparams[pairtypeid] = pairtypeparams[(t1, t2)]
+                else:
+                    sig_1, eps_1 = at1['sig'], at1['eps']
+                    sig_2, eps_2 = at2['sig'], at2['eps']
+                    eps = fudgeLJ*(eps_1*eps_2)**(1.0/2.0)
+                    if combinationrule == 2:
+                        sig = 0.5*(sig_1 + sig_2)
+                    else:
+                        sig = (sig_1*sig_2)**(1.0/2.0)
+                    pairtypeid = max(use_pairtypeparams) + 1 if use_pairtypeparams else 0
+                    use_pairtypeparams[pairtypeid] = {'sig': sig, 'eps': eps}
+                    pairtypeparams[(t1, t2)] = use_pairtypeparams[pairtypeid]
+                    types_pairtypeid[(t1, t2)] = pairtypeid
+                pairs_tmp.append((pid1, pid2, pairtypeid))
+            else:  # Params provided
+                if int(tmp[2]) != 1:
+                    print('Warning! Supported only pair with type 1, given: {}'.format(
+                        tmp[2]))
+                    line = f.readline()
+                    continue
+                sig = float(tmp[3])
+                eps = float(tmp[4])
+                use_pairtypeparams.update({
+                    pairtypeid: {
+                        'sig': sig,
+                        'eps': eps
+                        }})
+                pairs_tmp.append((pid1, pid2, pairtypeid))
+                pairtypeid += 1
             line = f.readline()
-    
+        else:
+            line = f.readline()
+
+    f.seek(file_pos)
+
     if combinationrule == 1:
         for k, v in use_pairtypeparams.iteritems():
             c6, c12 = float(v['sig']), float(v['eps'])
@@ -755,42 +768,45 @@ def storeBonds(f, types, bondtypes, bondtypeparams, bonds, num_atoms_molecule,\
     bonds_tmp = []
     top = False
     pos = f.tell()
+    line=f.readlastline()
     local_exclusions=[] # excluded pairs of atoms within this mol (local ids)
-   
-    line = f.readline().strip()
-    in_section = False
-    while line:
-        if line.startswith('['):
-            if 'bonds' in line:
-                in_section = True
-            else:
-                in_section = False
-            line = f.readline().strip()
+
+    while not 'bonds' in line:
+        line = f.readline()
+        if 'moleculetype' in line or not line:
+            f.seek(pos)
+            return bonds
+
+    line = f.readline()
+    while(len(line) > 1 and not '[' in line):
+        if line[0] == ";":   # skip comment lines
+            line = f.readline()
             continue
-        elif line.startswith(';'):
-            line = f.readline().strip()
-            continue
+        tmp = line.split()
+        lookup=(len(tmp)<=3) # if the bond has < 3 arguments, it is defined in the bondtypes section and we have to look it up
+        pid1, pid2 = map(int, tmp[0:2])
+        if lookup:
+            # based on atom names: potential has to be defined in bondtypes already
+            # this is for tabulated bond potentials specified based on type
+            t1, t2 = types[pid1-1], types[pid2-1]
+            if t1 > t2: # interactions in the other way
+                t1, t2 = t2, t1
+            bdtypeid = bondtypes[t1][t2] #bondtypes[t1][t2]
         else:
-            if in_section:
-                tmp = line.split(';')[0].split()
-                lookup = len(tmp) <= 3
-                pid1, pid2 = map(int, tmp[0:2])
-                if lookup:
-                    t1, t2 = types[pid1-1], types[pid2-1]
-                    if t1 > t2:
-                        t1, t2 = t2, t1
-                    bdtypeid = bondtypes[t1][t2]
-                else:
-                    temptype = ParseBondTypeParam(line)
-                    bdtypeid = FindType(temptype, bondtypeparams)
-                    if bdtypeid is None:
-                        bdtypeid = len(bondtypeparams)
-                        bondtypeparams.update({bdtypeid: temptype})
-                bonds_tmp.append((pid1, pid2, bdtypeid))
-                if bondtypeparams[bdtypeid].automaticExclusion():
-                    local_exclusions.append((pid1, pid2))
-            line = f.readline().strip()
-    f.seek(pos)
+            # this one is specific for this pair of atoms: check if we need to make a new type
+            temptype=ParseBondTypeParam(line)
+            bdtypeid=FindType(temptype, bondtypeparams)
+            if bdtypeid==None:
+                bdtypeid=len(bondtypeparams)
+                bondtypeparams.update({bdtypeid:temptype})
+            
+        bonds_tmp.append((pid1, pid2, bdtypeid)) # store bondtypes for this molecule
+        if bondtypeparams[bdtypeid].automaticExclusion():
+             # this bond type generates an exclusion as defined by the
+             # function type (see gromacs manual)
+            local_exclusions.append((pid1, pid2))
+        line = f.readline()
+    
 
     if doRegularExcl:
         # generate exclusions for atoms up to a number of nregxcl bonds away
@@ -827,50 +843,45 @@ def storeBonds(f, types, bondtypes, bondtypeparams, bonds, num_atoms_molecule,\
             exclusions.append((ia,ib))
     return bonds
         
-
 def storeAngles(f, types, angletypes, angletypeparams, angles, num_atoms_molecule, num_molecule_copies, molstartindex):
     line = ''
     angles_tmp = []
     pos = f.tell()
-    line = f.readlastline()
-
-    line = f.readline().strip()
-    in_section = False
-    while line:
-        if line.startswith('['):
-            if 'angles' in line:
-                in_section = True
-            else:
-                in_section = False
-            line = f.readline().strip()
-            continue
-        elif line.startswith(';'):
-            line = f.readline().strip()
-            continue
-        else:
-            if in_section:
-                tmp = line.split(';')[0].split()
-                lookup = len(tmp) <= 4
-                pid1, pid2, pid3 = map(int, tmp[0:3])
-                if lookup:
-                    t1, t2, t3 = types[pid1-1], types[pid2-1], types[pid3-1]
-                    try:
-                        typeid = angletypes[t1][t2][t3]
-                    except KeyError:
-                        t1, t3 = t3, t1
-                        typeid = angletypes[t1][t2][t3]
-                else:
-                    # Checks if we need to make new type.
-                    temptype = ParseAngleTypeParam(line)
-                    typeid = FindType(temptype, angletypeparams)
-                    if typeid == None:
-                        typeid = len(angletypeparams)
-                        angletypeparams.update({typeid:temptype})
-                angles_tmp.append((pid1, pid2, pid3, typeid))
+    line=f.readlastline()
+    while not 'angles' in line:
         line = f.readline()
-    
-    f.seek(pos)
-
+        if 'moleculetype' in line or not line:
+            f.seek(pos)
+            return angles
+        
+    line = f.readline()
+    while(len(line) > 1 and not '[' in line):
+        if line[0] == ";": # skip comment lines
+            line = f.readline()
+            continue
+        tmp = line.split()
+        lookup=(len(tmp)<=4)
+        pid1, pid2, pid3 = map(int, tmp[0:3])
+        if lookup:
+            t1, t2, t3 = types[pid1-1], types[pid2-1], types[pid3-1]
+            try:
+                antypeid = angletypes[t1][t2][t3]
+            except KeyError:
+                #todo: is this good style?
+                t1, t3 = t3, t1
+                antypeid = angletypes[t1][t2][t3]
+        else:
+            #check if we need to make new type
+            temptype=ParseAngleTypeParam(line) 
+            antypeid=FindType(temptype, angletypeparams)
+            if antypeid==None:
+                antypeid=len(angletypeparams)
+                angletypeparams.update({antypeid:temptype})
+                
+        angles_tmp.append((pid1, pid2, pid3, antypeid)) # store angletypes for this molecule
+        
+        line = f.readline()
+        
     # extend angles to copies of this molecule
     angles_per_mol = len(angles_tmp)
     for i in range(num_molecule_copies):
@@ -882,64 +893,60 @@ def storeAngles(f, types, angletypes, angletypeparams, angles, num_atoms_molecul
             if antypeid in angles:
                 angles[antypeid].append((ia, ib, ic))
             else:
-                angles.update({antypeid: [(ia, ib, ic)]})
-    return angles
+                angles.update({antypeid:[(ia, ib, ic)]})
+    return angles  
 
-def storeDihedrals(f, types, dihedraltypes, dihedraltypeparams, dihedrals, num_atoms_molecule, num_molecule_copies, molstartindex, atomtypeparams):
+
+def storeDihedrals(f, types, dihedraltypes, dihedraltypeparams, dihedrals, num_atoms_molecule, num_molecule_copies, molstartindex, atomtype_wildcard):
     line = ''
     dihedrals_tmp = []
     pos = f.tell()
     line=f.readlastline()
-    
-    line = f.readline().strip()
-    in_section = False
-    while line:
-        if line.startswith('['):
-            if 'dihedrals' in line:
-                in_section = True
-            else:
-                in_section = False
-            line = f.readline().strip()
+    while not 'dihedrals' in line:
+        line = f.readline()
+        if 'moleculetype' in line or not line:
+            f.seek(pos)
+            return dihedrals
+
+    line = f.readline()
+    while(len(line) > 1 and not '[' in line):
+        if line[0] == ";": # skip comment lines
+            line = f.readline()
             continue
-        elif line.startswith(';'):
-            line = f.readline().strip()
-            continue
-        else:
-            if in_section:
-                # Skip improper dihedrals, not supported yet
-                if 'improper' in line:
-                    line = f.readline().strip()
-                    continue
-                tmp = line.split(';')[0].split()
-                lookup = len(tmp) <= 5
-                pid1, pid2, pid3, pid4 = map(int, tmp[0:4])
-                if lookup:
-                    t1, t2, t3, t4 = (types[x-1] for x in map(int, tmp[0:4]))
+        tmp = line.split()
+        lookup=(len(tmp)<=5)
+        pid1, pid2, pid3, pid4 = map(int, tmp[0:4])
+        if lookup:
+            t1, t2, t3, t4 = types[pid1-1], types[pid2-1], types[pid3-1], types[pid4-1] # get types of particles
+            try:
+                dihtypeid = dihedraltypes[t1][t2][t3][t4] #dihtypeid is now a tuple
+            #if t1 not in dihedraltypes: # interactions in the other way
+            except KeyError:
+                t1, t2, t3, t4 = t4, t3, t2, t1
+                try: 
+                    dihtypeid = dihedraltypes[t1][t2][t3][t4]
+                except KeyError:
+                    t1, t2, t3, t4 = atomtype_wildcard, t2, t3, atomtype_wildcard
                     try:
                         dihtypeid = dihedraltypes[t1][t2][t3][t4]
                     except KeyError:
-                        t1, t2, t3, t4 = (
-                            atomtypeparams[t1]['atnum'],
-                            atomtypeparams[t2]['atnum'],
-                            atomtypeparams[t3]['atnum'],
-                            atomtypeparams[t4]['atnum']
-                            )
-                        try:
-                            dihtypeid = dihedraltypes[t1][t2][t3][t4]
-                        except KeyError:
-                            dihtypeid = dihedraltypes[t4][t3][t2][t1]
-                else:
-                    #check if we need to make new type
-                    temptype=ParseDihedralTypeParam(line)
-                    dihtypeid=FindType(temptype, dihedraltypeparams)
-                    if dihtypeid == None:
-                        dihtypeid = len(dihedraltypeparams)
-                        dihedraltypeparams.update({dihtypeid:temptype})
-                dihedrals_tmp.append((pid1, pid2, pid3,pid4, dihtypeid))
-        line = f.readline()
-    
-    f.seek(pos)
+                        t1, t2, t3, t4 = t1, t3, t2, t4
+                        dihtypeid = dihedraltypes[t1][t2][t3][t4]
+                #t1, t2, t3, t4 = t4, t1, t2, t3
+                #dihtypeid = dihedraltypes[t1][t2][t3][t4]
+        else:
+            #check if we need to make new type
+            temptype=ParseDihedralTypeParam(line)
+            dihtypeid=FindType(temptype, dihedraltypeparams) #here,dihtypeid is an int, not a tuple
+            if dihtypeid==None:
+                dihtypeid=len(dihedraltypeparams)
+                dihedraltypeparams.update({dihtypeid:temptype})
 
+            dihtypeid=(dihtypeid,) #convert to tuple for putting in dihedrals_tmp
+        
+        dihedrals_tmp.append((pid1, pid2, pid3,pid4, dihtypeid)) # 
+        line = f.readline()
+        
     # extend angles to copies of this molecule
     dihedrals_per_mol = len(dihedrals_tmp)
     for i in range(num_molecule_copies):
@@ -948,13 +955,13 @@ def storeDihedrals(f, types, dihedraltypes, dihedraltypeparams, dihedrals, num_a
             ia=molstartindex+pid1 + (i * num_atoms_molecule) # index of copy atom i
             ib=molstartindex+pid2 + (i * num_atoms_molecule) # index of copy atom j
             ic=molstartindex+pid3 + (i * num_atoms_molecule) # index of copy atom k
-            idd=molstartindex+pid4 + (i * num_atoms_molecule) # index of copy atom l
+            id=molstartindex+pid4 + (i * num_atoms_molecule) # index of copy atom l
             if dihtypeid in dihedrals:
-                dihedrals[dihtypeid].append((ia, ib, ic, idd))
+                dihedrals[dihtypeid].append((ia, ib, ic, id)) # ###what happens now that it's a tuple? this has only been briefly tested for the case of more than one molecule containing dihedrals
             else:
-                dihedrals.update({dihtypeid: [(ia, ib, ic, idd)]})
+                dihedrals.update({dihtypeid:[(ia, ib, ic, id)]})
     return dihedrals
-
+    
 def storeImpropers(f, types, impropertypes, impropertypeparams, impropers, num_atoms_molecule, num_molecule_copies, molstartindex, atomtype_wildcard):
     line = ''                          
     impropers_tmp = []
@@ -1015,8 +1022,6 @@ def storeImpropers(f, types, impropertypes, impropertypeparams, impropers, num_a
                 dihtypeid=len(impropertypeparams)
                 impropertypeparams.update({dihtypeid:temptype})
 
-            dihtypeid=(dihtypeid,) #convert to tuple for putting in impropers_tmp
-
         impropers_tmp.append((pid1, pid2, pid3,pid4, dihtypeid)) # 
         line = f.readline()
 
@@ -1062,19 +1067,17 @@ def setAngleInteractions(system, angles, angletypeparams):
     return list
 
 def setDihedralInteractions(system, dihedrals, dihedraltypeparams):
-    list={}
+    d_list={}
     
-    for idlist, dihedrallist in dihedrals.iteritems():
+    for dihid, dihedrallist in dihedrals.iteritems():
         fpl = espressopp.FixedQuadrupleList(system.storage)
         fpl.addQuadruples(dihedrallist)
-        for i in range(len(idlist)):
-          id=idlist[i]
-          dihedralinteraction=dihedraltypeparams[id].createEspressoInteraction(system, fpl)
-          if dihedralinteraction:
-              system.addInteraction(dihedralinteraction)
-              ii = len(list)
-              list.update({ii: dihedralinteraction}) #ii instead of id bcs same id may already have been encountered in another idlist (tuple of id's)
-    return list
+        dihedralinteraction=dihedraltypeparams[dihid].createEspressoInteraction(system, fpl)
+        if dihedralinteraction:
+            system.addInteraction(dihedralinteraction)
+            ii = len(d_list)
+            d_list.update({ii: dihedralinteraction}) #ii instead of id bcs same id may already have been encountered in another idlist (tuple of id's)
+    return d_list
 
 def setImproperInteractions(system, impropers, impropertypeparams):
     list={}
@@ -1206,6 +1209,7 @@ def setLennardJonesInteractions(system, defaults, atomtypeparams, verletlist, cu
             else:
                 sig = (sig_1*sig_2)**(1.0/2.0)
                 eps = (eps_1*eps_2)**(1.0/2.0)
+            print 'Combination rule: {}, sig={}, eps={}'.format(combinationrule, sig, eps)
         if sig > 0.0 and eps > 0.0:
             print "Setting LJ interaction for", type_1, type_2, "to sig ", sig, "eps", eps, "cutoff", cutoff
             ljpot = espressopp.interaction.LennardJones(epsilon=eps, sigma=sig, shift='auto', cutoff=cutoff)
@@ -1332,54 +1336,73 @@ def setCoulomb14Interactions(system, defaults, onefourlist, rc, types):
     system.addInteraction(interaction)
     return interaction
 
-def setTabulatedInteractions(system, atomtypeparams, vl, cutoff, interaction=None, ftpl=None, table_groups=None):
-    """Sets tabulated potential for types that has particletype set to 'V'."""
-    spline_type = 2
+def setTabulatedInteractions(system, atomtypeparams, vl, cutoff=None, interaction=None, ftpl=None,
+                             table_groups=None, adress_is_cg=True, hadress=False,
+                             atomtypes_group=None,
+                             spline_type=3):
+    """Sets tabulated potentials.
+
+    Args:
+        system: The system object.
+        atomtypeparams: Dictionary with key as atom type and values with atomtypes from topology.
+        vl: The VerletList object.
+        cutoff: The cutoff value for potentials.
+        interaction: The interaction object.
+        ftpl: The fixed tuple list object for AdResS.
+        table_groups: The list of atom type names that should be use for tabulated potentials. If
+            empty then all atom types will be consider to use tabulated potential.
+        atomtypes_group: The dictionary that groups number of atomtypes into single type. The
+            key is an original atom type and the value is corresponding group.
+        spline_types: The type of sp-line. (default: 3)
+    """
     if table_groups is None:
         table_groups = []
+    if atomtypes_group is None:
+        atomtypes_group = {}
+
     if interaction is None:
         if ftpl:
             interaction = espressopp.interaction.VerletListAdressTabulated(vl, ftpl)
         else:
             interaction = espressopp.interaction.VerletListTabulated(vl)
-    else:
-        if not ftpl:
-            interaction = espressopp.interaction.VerletListTabulated(vl)
-
-    type_pairs = {
-            tuple(sorted([type_1, type_2])) 
-            for type_1, v1 in atomtypeparams.iteritems() 
-            for type_2, v2 in atomtypeparams.iteritems()
-            if (v1['atnum'] in table_groups and v2['atnum'] in table_groups)
-            }
-    print type_pairs
-    for type_1, type_2 in type_pairs:
-        print('Set tabulated potential {}-{}'.format(type_1, type_2))
-        name_1 = atomtypeparams[type_1]['atnum']
-        name_2 = atomtypeparams[type_2]['atnum']
+    
+    name_pairs = set()
+    name_types = defaultdict(set)
+    for type_1, v1 in atomtypeparams.iteritems():
+        for type_2, v2 in atomtypeparams.iteritems():
+            t1 = atomtypes_group.get(v1['atnum'], v1['atnum'])
+            t2 = atomtypes_group.get(v2['atnum'], v2['atnum'])
+            if not table_groups or (t1 in table_groups and t2 in table_groups):
+                kk = tuple(sorted([t1, t2]))
+                tt = tuple(sorted([type_1, type_2]))
+                name_pairs.add(kk)
+                name_types[kk].add(tt)
+    
+    for name_1, name_2 in name_pairs:
+        print('Set tabulated potential {}-{}'.format(name_1, name_2))
         table_name = '{}-{}.tab'.format(name_1, name_2)
         orig_table_name = 'table_{}_{}.xvg'.format(name_1, name_2)
         print('Converting table_{name1}_{name2}.xvg to {name1}-{name2}.tab'.format(
             name1=name_1, name2=name_2))
-        espressopp.tools.convert.gromacs.convertTable(orig_table_name, table_name)
+        convertTable(orig_table_name, table_name)
         if ftpl:
-            interaction.setPotentialCG(
-                type1=type_1,
-                type2=type_2,
-                potential=espressopp.interaction.Tabulated(
-                    itype=spline_type,
-                    filename=table_name,
-                    cutoff=cutoff))
+            if adress_is_cg:
+                set_potential_fn = interaction.setPotentialCG
+            else:
+                set_potential_fn = interaction.setPotentialAT
         else:
-            interaction.setPotential(
+            set_potential_fn = interaction.setPotential
+        for type_1, type_2 in name_types[(name_1, name_2)]:
+            print('Defining potential for types: {}-{}'.format(type_1, type_2))
+            set_potential_fn(
                 type1=type_1,
                 type2=type_2,
                 potential=espressopp.interaction.Tabulated(
                     itype=spline_type,
                     filename=table_name,
                     cutoff=cutoff))
-    if interaction and not ftpl:
-        system.addInteraction(interaction)
+
+    system.addInteraction(interaction)
 
     return interaction
 
@@ -1436,8 +1459,8 @@ def convertTable(gro_in_file, esp_out_file, sigma=1.0, epsilon=1.0, c6=1.0, c12=
             f = fd*sigma / epsilon
             
             if (not angle and not dihedral and r != 0) or \
-                 (angle and r <= 3.1415 and r > 0) or \
-                  (dihedral and r >= -3.1415 and r <= 3.1415):
+                 (angle and r <= math.pi and r >= 0) or \
+                  (dihedral and r >= -math.pi and r <= math.pi):
                 fout.write("%15.8g %15.8g %15.8g\n" % (r, e, f))
     
     else: # non-bonded has 7 columns

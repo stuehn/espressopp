@@ -19,8 +19,8 @@ from espressopp.tools import timers
 
 
 # simulation parameters (nvt = False is nve)
-steps = 1 
-check = steps
+steps = 10 
+check = 2
 rc    = 1.1  # Verlet list cutoff
 skin  = 0.3
 timestep = 0.0004
@@ -68,29 +68,15 @@ c12 = 1.0
 grofile = "confout.gro"
 topfile = "topol.top"
 
-# Generate dictonary of potentials for all particle types (relies on table file names).
-# Input is list of gromacs tabulated non-bonded potentials file names
-# Output is something like {"A_A":potAA, "A_B":potAB, "B_B":potBB}
-def genTabPotentials(tabfilesnb):
-    potentials = {}
-    for fg in tabfilesnb:
-        fe = fg.split(".")[0]+".tab" # name of espressopp file
-        gromacs.convertTable(fg, fe, sigma, epsilon, c6, c12)
-        pot = espressopp.interaction.Tabulated(itype=spline, filename=fe, cutoff=rc)
-        t1, t2 = fg[6], fg[8] # type 1, type 2
-        potentials.update({t1+"_"+t2: pot})
-    return potentials
-
 # define types of particles (used for non-bonded interactions)
-particleTypes = {"A":["A1m", "A2m", "A1r", "A2r"],"B":["B1u","B2u", "B1d", "B2d"]}
-potentials = genTabPotentials(tabfilesnb)
-
+particleTypes = {'A1m': 'A', 'A2m': 'A', 'A1r': 'A', 'A2r': 'A',
+                 'B1u': 'B', 'B2u': 'B', 'B1d': 'B', 'B2d': 'B'}
 
 ######################################################################
 ##  IT SHOULD BE UNNECESSARY TO MAKE MODIFICATIONS BELOW THIS LINE  ##
 ######################################################################
-defaults, types, atomtypes, masses, charges, atomtypeparameters, bondtypes, bondtypeparams, angletypes, angletypeparams, dihedraltypes, dihedraltypeparams, exclusions, x, y, z, vx, vy, vz, resname, resid, Lx, Ly, Lz =gromacs.read(grofile, topfile)
-#defaults, types, masses, charges, atomtypeparameters, bondtypes, bondtypeparams, angletypes, angletypeparams, dihedraltypes, dihedraltypeparams, exclusions, x, y, z, vx, vy, vz, Lx, Ly, Lz = gromacs.read(grofile, topfile)
+defaults, types, atomtypes, masses, charges, atomtypeparameters, bondtypes, bondtypeparams, angletypes, angletypeparams, dihedraltypes, dihedraltypeparams, exclusions, res_ids, x, y, z, vx, vy, vz, resname, Lx, Ly, Lz = gromacs.read(grofile, topfile)
+
 num_particles = len(x)
 density = num_particles / (Lx * Ly * Lz)
 size = (Lx, Ly, Lz)
@@ -117,11 +103,15 @@ system.storage.addParticles(allParticles, *props)
 system.storage.decompose()
 
 
-
 # Tabulated Verlet list for non-bonded interactions
 vl = espressopp.VerletList(system, cutoff = rc + system.skin)
-internb = espressopp.interaction.VerletListTabulated(vl)
-gromacs.setTabulatedInteractions(potentials, particleTypes, system, internb)
+internb = gromacs.setTabulatedInteractions(
+    system,
+    atomtypeparameters,
+    vl,
+    cutoff=rc+system.skin,
+    atomtypes_group=particleTypes,
+    spline_type=spline)
 
 vl.exclude(exclusions)
 

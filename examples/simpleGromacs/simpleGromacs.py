@@ -19,8 +19,8 @@ from espressopp.tools import timers
 
 
 # simulation parameters (nvt = False is nve)
-steps = 1000
-check = 6   # how many times to display energies during run
+steps = 100
+check = 2   # how many times to display energies during run
 rc   = 2.5  # Verlet list cutoff
 rcaa = 2.5  # cutoff A-A
 rcab = 2.0  # cutoff A-B
@@ -60,8 +60,10 @@ topfile = "topol.top"
 ######################################################################
 ##  IT SHOULD BE UNNECESSARY TO MAKE MODIFICATIONS BELOW THIS LINE  ##
 ######################################################################
-defaults, types, atomtypes, masses, charges, atomtypeparameters, bondtypes, bondtypeparams, angletypes, angletypeparams, exclusions, res_ids, x, y, z, resname, resid, Lx, Ly, Lz = gromacs.read(grofile, topfile)
-num_particles = len(x)
+input_conf = gromacs.read(grofile, topfile, return_tuple=False)
+Lx, Ly, Lz = input_conf.Lx, input_conf.Ly, input_conf.Lz
+
+num_particles = len(input_conf.x)
 density = num_particles / (Lx * Ly * Lz)
 size = (Lx, Ly, Lz)
 
@@ -79,8 +81,11 @@ system.storage = espressopp.storage.DomainDecomposition(system, nodeGrid, cellGr
 
 # add particles to the system and then decompose
 for pid in range(num_particles):
-    #system.storage.addParticle(pid + 1, Real3D(x[pid], y[pid], z[pid]))
-    system.storage.addParticles([[pid + 1, Real3D(x[pid], y[pid], z[pid]), types[pid]]], "id", "pos", "type")
+    system.storage.addParticles([
+        [pid + 1,
+         Real3D(input_conf.x[pid], input_conf.y[pid], input_conf.z[pid]),
+         input_conf.types[pid]]],
+        "id", "pos", "type")
 system.storage.decompose()
 
 
@@ -99,7 +104,7 @@ vl = espressopp.VerletList(system, cutoff = rc + system.skin)
 # note: in the previous version of this example, exclusions were treated
 # incorrectly. Here the nrexcl=3 parameter is taken into account 
 # which excludes all neighbors up to 3 bonds away
-vl.exclude(exclusions)
+vl.exclude(input_conf.exclusions)
 
 internb = espressopp.interaction.VerletListTabulated(vl)
 # A-A with Verlet list      
@@ -116,7 +121,8 @@ system.addInteraction(internb)
 
 
 # 2-body bonded interactions
-bondedinteractions=gromacs.setBondedInteractions(system, bondtypes, bondtypeparams)
+bondedinteractions=gromacs.setBondedInteractions(
+    system, input_conf.bondtypes, input_conf.bondtypeparams)
 #This could also be done manually:
 #fpl = espressopp.FixedPairList(system.storage)
 #fpl.addBonds(bonds['1'])
@@ -125,7 +131,8 @@ bondedinteractions=gromacs.setBondedInteractions(system, bondtypes, bondtypepara
 #system.addInteraction(interb)
 
 # 3-body bonded interactions
-angleinteractions=gromacs.setAngleInteractions(system, angletypes, angletypeparams)
+angleinteractions=gromacs.setAngleInteractions(
+    system, input_conf.angletypes, input_conf.angletypeparams)
 
 #This could also be done manually:
 #ftl = espressopp.FixedTripleList(system.storage)
